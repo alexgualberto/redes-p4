@@ -1,7 +1,3 @@
-from typing import NamedTuple
-import re
-
-
 class CamadaEnlace:
     ignore_checksum = False
 
@@ -45,22 +41,10 @@ class CamadaEnlace:
 
 class Enlace:
     def __init__(self, linha_serial):
-        self.prev_dtg = b''
         self.linha_serial = linha_serial
         self.linha_serial.registrar_recebedor(self.__raw_recv)
-
-    def tratar_datagrama_saida(self, datagrama: str):
-        dtg = datagrama.replace(b'\xdb', b'\xdb\xdd')
-        dtg = dtg.replace(b'\xc0', b'\xdb\xdc')
-        dtg = b'\xc0' + dtg + b'\xc0'
-        return dtg
-
-    def tratar_datagrama_entrada(self, datagrama: str):
-        dtg = datagrama.replace(b'\xdb\xdc', b'\xc0')
-        dtg = dtg.replace(b'\xdb\xdd', b'\xdb')
-        dtg = dtg.strip(b'\xc0')
-        return dtg
-
+        self.dados_residuais = b''
+	
     def registrar_recebedor(self, callback):
         self.callback = callback
 
@@ -68,51 +52,12 @@ class Enlace:
         # TODO: Preencha aqui com o código para enviar o datagrama pela linha
         # serial, fazendo corretamente a delimitação de quadros e o escape de
         # sequências especiais, de acordo com o protocolo CamadaEnlace (RFC 1055).
-        dtg = self.tratar_datagrama_saida(datagrama)
-        self.linha_serial.enviar(dtg)
+        datagrama = datagrama.replace(b'\xdb', b'\xdb\xdd')
+        datagrama = datagrama.replace(b'\xc0', b'\xdb\xdc')
+        self.linha_serial.enviar(b'\xc0' + datagrama + b'\xc0')
+        pass
 
-    def gerenciar_pacotes(self, dados: str):
-        END_count = dados.count(b'\xc0')
-        dados_sep = dados.split(b'\xc0')
-        skip = False
-        if dados.startswith(b'\xc0') and self.prev_dtg != b'':
-            env = self.prev_dtg.replace(b'\xdb\xdd', b'\xdb')
-            env = env.replace(b'\xdb\xdc', b'\xc0')
-            self.callback(env)
-            # self.callback(self.prev_dtg)
-            self.prev_dtg = b''
-
-        if not dados.startswith(b'\xc0') and END_count > 0 and self.prev_dtg != b'':
-            env = (self.prev_dtg + dados_sep[0]).replace(b'\xdb\xdd', b'\xdb')
-            env = env.replace(b'\xdb\xdc', b'\xc0')
-            self.callback(env)
-            # self.callback(self.prev_dtg + dados_sep[0])
-            self.prev_dtg = b''
-            dados_sep.pop(0)
-            skip = True
-
-        if dados_sep[-1] != b'':
-            self.prev_dtg += dados_sep[-1]
-            dados_sep = dados_sep[:-1]
-            if skip == True:
-                return
-        dados_sep = list(filter(lambda x: x != b'', dados_sep))
-
-        if not skip and len(dados_sep) == 0 and self.prev_dtg != b'' and not dados.startswith(b'\xc0') and END_count > 0:
-            env = self.prev_dtg.replace(b'\xdb\xdd', b'\xdb')
-            env = env.replace(b'\xdb\xdc', b'\xc0')
-            self.callback(env)
-            # self.callback(self.prev_dtg)
-            self.prev_dtg = b''
-            return
-
-        for d in dados_sep:
-            env = d.replace(b'\xdb\xdd', b'\xdb')
-            env = env.replace(b'\xdb\xdc', b'\xc0')
-            self.callback(env)
-            # self.callback(d)
-
-    def __raw_recv(self, dados: str):
+    def __raw_recv(self, dados):
         # TODO: Preencha aqui com o código para receber dados da linha serial.
         # Trate corretamente as sequências de escape. Quando ler um quadro
         # completo, repasse o datagrama contido nesse quadro para a camada
@@ -120,4 +65,24 @@ class Enlace:
         # vir quebrado de várias formas diferentes - por exemplo, podem vir
         # apenas pedaços de um quadro, ou um pedaço de quadro seguido de um
         # pedaço de outro, ou vários quadros de uma vez só.
-        self.gerenciar_pacotes(dados)
+        dados = self.dados_residuais + dados
+        
+        self.dados_residuais = b''
+        
+        if not dados.endswith(b'\xc0'):
+            dados = dados.split(b'\xc0')
+            dados = list(filter((b'').__ne__, dados))
+            self.dados_residuais += dados.pop(-1)
+        else:
+            dados = dados.split(b'\xc0')
+            dados = list(filter((b'').__ne__, dados))
+		
+        for datagrama in dados:
+            datagrama = datagrama.replace(b'\xdb\xdc', b'\xc0')
+            datagrama = datagrama.replace(b'\xdb\xdd', b'\xdb') 
+
+            try:
+                self.callback(datagrama)
+            except:
+                import traceback
+                traceback.print_exc()
